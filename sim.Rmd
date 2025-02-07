@@ -24,19 +24,18 @@ library(readxl)
 library(tidyr)
 
 set.seed(123)
-
-
-
 ```
 # Approach
 
-In this document I walk through my simulation of ANC. All the parameters here can be tweaked. I've made judgments about what I think work best. 
+In this document I walk through my simulation of interventions. The current document focuses on preeclampsia.
+
+All the parameters here can be tweaked. I've made judgments about what I think work best. 
 
 # Simulation Parameters
 
 ## Population ANC in Kenya, Nigeria, India, and Senegal
 
-This is drawn from the provided spreadsheet.
+This is drawn from the provided spreadsheet. Place that file in this folder with the name 'model-inputs.xls'.
 
 ```{r n_population}
 
@@ -519,10 +518,11 @@ output_simulation_results <- function(simulation_output, intervention_name = "In
   print(quantiles_table |> kable())
 }
 
+## Run the simulations
 # Run the simulation with caching and naming
 low_dose_aspirin_pe_simulation_results <- simulate_preeclampsia_outcomes(
   population_size = n_population,
-  n_simulations = 100000,
+  n_simulations = 500000,
   alpha_reached = 35,
   beta_reached = 35 * 5.6667,
   alpha_uptake = 60,
@@ -537,7 +537,7 @@ low_dose_aspirin_pe_simulation_results <- simulate_preeclampsia_outcomes(
 
 calcium_pe_simulation_results <- simulate_preeclampsia_outcomes(
   population_size = n_population,
-  n_simulations = 100000,
+  n_simulations = 500000,
   alpha_reached = 35,
   beta_reached = 35 * 5.6667,
   alpha_uptake = 60,
