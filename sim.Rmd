@@ -17,6 +17,7 @@ editor_options:
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 
+library(data.table)
 library(dplyr)
 library(ggplot2)
 library(kableExtra)
@@ -233,13 +234,12 @@ simulate_preeclampsia_outcomes <- function(
   simulation_name = "default_simulation",
   attempt_cache = FALSE
 ) {
-  
   if (!dir.exists("results")) {
     dir.create("results")
   }
   
   cache_path <- paste0("results/", simulation_name, "_", n_simulations, "_sims.rds")
-
+  
   cat("Starting simulation...\n")
   cat("Total simulations: ", format(n_simulations, scientific = FALSE), "\n")
   
@@ -248,70 +248,47 @@ simulate_preeclampsia_outcomes <- function(
     cached_data <- readRDS(cache_path)
     return(cached_data)
   }
-
-  # Pre-allocate storage for results
-  results <- data.frame(
+  
+  # Vectorized simulation logic
+  p_reached <- rbeta(n_simulations, alpha_reached, beta_reached)
+  n_reached <- round(population_size * p_reached)
+  
+  p_uptake <- rbeta(n_simulations, alpha_uptake, beta_uptake)
+  n_uptake <- rbinom(n_simulations, n_reached, p_uptake)
+  
+  p_adverse_event <- rbeta(n_simulations, alpha_adverse_event, beta_adverse_event)
+  n_no_intervention <- population_size - n_uptake
+  adverse_events_no_intervention <- rbinom(n_simulations, n_no_intervention, p_adverse_event)
+  
+  effect_size <- runif(n_simulations, effect_size_min, effect_size_max)
+  adjusted_adverse_event_rate <- p_adverse_event * (1 - effect_size)
+  
+  adverse_events_with_intervention <- rbinom(n_simulations, n_uptake, adjusted_adverse_event_rate)
+  
+  total_adverse_events <- adverse_events_no_intervention + adverse_events_with_intervention
+  cases_prevented <- (n_uptake * p_adverse_event) - adverse_events_with_intervention
+  
+  # Store results in a data.table
+  results_dt <- data.table(
     simulation_id = 1:n_simulations,
-    effect_size = numeric(n_simulations),
-    population_size = rep(population_size, n_simulations),
-    p_reached = numeric(n_simulations),
-    n_reached = integer(n_simulations),
-    p_uptake = numeric(n_simulations),
-    n_uptake = integer(n_simulations),
-    p_adverse_event = numeric(n_simulations),
-    n_no_intervention = integer(n_simulations),
-    adverse_events_no_intervention = integer(n_simulations),
-    adjusted_adverse_event_rate = numeric(n_simulations),
-    adverse_events_with_intervention = integer(n_simulations),
-    total_adverse_events = integer(n_simulations),
-    cases_prevented = numeric(n_simulations)
+    effect_size,
+    population_size,
+    p_reached,
+    n_reached,
+    p_uptake,
+    n_uptake,
+    p_adverse_event,
+    n_no_intervention,
+    adverse_events_no_intervention,
+    adjusted_adverse_event_rate,
+    adverse_events_with_intervention,
+    total_adverse_events,
+    cases_prevented
   )
-
-  for (sim in 1:n_simulations) {
-    if (sim %% 10000 == 0) {
-      cat("Iteration:", format(sim, scientific = FALSE), "of", format(n_simulations, scientific = FALSE), "\n")
-      flush.console()
-    }
-
-    # Simulate proportion of people reached
-    p_reached <- rbeta(1, alpha_reached, beta_reached)
-    n_reached <- round(population_size * p_reached)
-
-    # Simulate intervention uptake among those reached
-    p_uptake <- rbeta(1, alpha_uptake, beta_uptake)
-    n_uptake <- rbinom(1, n_reached, p_uptake)
-
-    # Simulate adverse events without intervention
-    p_adverse_event <- rbeta(1, alpha_adverse_event, beta_adverse_event)
-    n_no_intervention <- population_size - n_uptake
-    adverse_events_no_intervention <- rbinom(1, n_no_intervention, p_adverse_event)
-
-    # Draw effect size from uniform distribution
-    effect_size <- runif(1, effect_size_min, effect_size_max)
-    adjusted_adverse_event_rate <- p_adverse_event * (1 - effect_size)
-
-    # Simulate adverse events with intervention (applying effect size reduction)
-    adverse_events_with_intervention <- rbinom(1, n_uptake, adjusted_adverse_event_rate)
-
-    # Total cases and cases prevented
-    total_adverse_events <- adverse_events_no_intervention + adverse_events_with_intervention
-    cases_prevented <- (n_uptake * p_adverse_event) - adverse_events_with_intervention
-
-    # Store results in pre-allocated data frame
-    results$effect_size[sim] <- effect_size
-    results$p_reached[sim] <- p_reached
-    results$n_reached[sim] <- n_reached
-    results$p_uptake[sim] <- p_uptake
-    results$n_uptake[sim] <- n_uptake
-    results$p_adverse_event[sim] <- p_adverse_event
-    results$n_no_intervention[sim] <- n_no_intervention
-    results$adverse_events_no_intervention[sim] <- adverse_events_no_intervention
-    results$adjusted_adverse_event_rate[sim] <- adjusted_adverse_event_rate
-    results$adverse_events_with_intervention[sim] <- adverse_events_with_intervention
-    results$total_adverse_events[sim] <- total_adverse_events
-    results$cases_prevented[sim] <- cases_prevented
-  }
-
+  
+  # Convert to tibble for output
+  results_tibble <- as_tibble(results_dt)
+  
   # Combine results with input parameters
   output <- list(
     input_parameters = list(
@@ -327,12 +304,12 @@ simulate_preeclampsia_outcomes <- function(
       effect_size_max = effect_size_max,
       simulation_name = simulation_name
     ),
-    simulation_results = results
+    simulation_results = results_tibble
   )
-
+  
   # Save the combined output to cache
   saveRDS(output, cache_path)
-
+  
   return(output)
 }
 
@@ -522,7 +499,7 @@ output_simulation_results <- function(simulation_output, intervention_name = "In
 # Run the simulation with caching and naming
 low_dose_aspirin_pe_simulation_results <- simulate_preeclampsia_outcomes(
   population_size = n_population,
-  n_simulations = 500000,
+  n_simulations = 3000000,
   alpha_reached = 35,
   beta_reached = 35 * 5.6667,
   alpha_uptake = 60,
@@ -537,7 +514,7 @@ low_dose_aspirin_pe_simulation_results <- simulate_preeclampsia_outcomes(
 
 calcium_pe_simulation_results <- simulate_preeclampsia_outcomes(
   population_size = n_population,
-  n_simulations = 500000,
+  n_simulations = 3000000,
   alpha_reached = 35,
   beta_reached = 35 * 5.6667,
   alpha_uptake = 60,
