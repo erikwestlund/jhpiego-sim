@@ -15,7 +15,7 @@ editor_options:
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(echo = FALSE)
 
 library(data.table)
 library(dplyr)
@@ -38,7 +38,7 @@ All the parameters here can be tweaked. I've made judgments about what I think w
 
 This is drawn from the provided spreadsheet. Place that file in this folder with the name 'model-inputs.xls'.
 
-```{r n_population}
+```{r n_population, echo=FALSE, message=FALSE}
 
 model_inputs <- readxl::read_excel("model-inputs.xlsx", sheet = "DRAFT Inputs")
 
@@ -57,217 +57,365 @@ n_population |> kable()
 
 ```
 
-## Reachable population
+## Beta Distribution
 
-We estimate that about 15% of the population (women in individual antenatal care) are reachable by the intervention. To handle the uncertainty around this, we can use a beta distribution.
+We use **Beta distributions** to model uncertainty in key parameters like the **proportion of women reached**, **intervention uptake**, and the **probability of adverse events**. The Beta distribution is ideal for modeling probabilities, as it is defined on the interval \([0, 1]\).
 
-We need to define parameters of that distribution -- alpha and beta.  It's unlikely the reachable population is as low as 0 or 0.05 and also unlikely it's far above 0.15.  So we want parameters that reflect this moderate uncertainty.
+The Beta distribution is parameterized by **\(\alpha\)** and **\(\beta\)**, with the mean given by:
 
-In the beta distribution:
+\[
+\mu = \frac{\alpha}{\alpha + \beta}
+\]
 
-$p = \frac{\alpha}{\alpha + \beta}$
+To ensure consistency and parsimony across models, we fix **\(\alpha\)** in the range at 40 and calculate **\(\beta\)** based on the target probability \( p \):
 
-Below are four examples of alpha/beta parameters where $p = 0.15$. 
+\[
+\beta = \alpha \times \left( \frac{1 - p}{p} \right)
+\]
 
-```{r reachable_population, echo=FALSE}
-params <- list(
-  list(alpha = 35, beta = round(35 * 5.6667), label = "1. [Chosen] Beta(35,198))"),
-  list(alpha = 22, beta = round(22 * 5.6667), label = "2. Beta(22,125))"),
-  list(alpha = 18, beta = round(18 * 5.6667), label = "3. Beta(18,102))"),
-  list(alpha = 9,  beta = round(9 * 5.6667),  label = "4. Beta(9,51))")
-)
+This approach results in **fairly tight distributions** centered around the target probability. For **low probabilities**, the distribution is slightly **right-skewed**, while for **high probabilities**, it becomes **left-skewed**. However, the skewness remains minimal, ensuring the distribution remains concentrated around the specified mean. This method provides a standardized, reliable way to represent uncertainty across various parameters.
 
-samples <- lapply(params, function(p) {
-  data.frame(
-    uptake = rbeta(10000, p$alpha, p$beta),
-    label = p$label
-  )
-}) |> bind_rows()
+```{r beta_calc, echo=FALSE}
+# Function to calculate beta given alpha and target probability
+calculate_beta_params <- function(alpha, target_prob) {
+  beta <- alpha * ((1 - target_prob) / target_prob)
+  
+  # Return as a list
+  return(list(alpha = alpha, beta = beta))
+}
 
-# Plotting
-ggplot(samples, aes(x = uptake, fill = label)) +
-  geom_histogram(bins = 50, alpha = 0.6, position = "identity") +
-  geom_vline(xintercept = 0.15, linetype = "dashed", color = "black", linewidth = 1) +
-  scale_x_continuous(breaks = seq(0, 1, 0.15)) +
-  facet_wrap(~label, scales = "free_y") +
-  labs(title = "Comparison of Adjusted Beta Distributions for Reachable Population",
-       x = "Proportion of Women Reached by Intervention",
-       y = "Frequency") +
-  theme_minimal() + 
-  theme(legend.position = "none")
-
-alpha_reached <- 35
-beta_reached <- 35 * 5.6667
+# Function to generate alpha-beta pairs for all probabilities (0 to 100%)
+generate_all_beta_params <- function(alpha, step_size = 0.01) {
+  probabilities <- seq(0.01, 0.99, by = step_size)  # Avoid 0 and 1 to prevent infinite beta values
+  
+  params <- lapply(probabilities, function(p) {
+    beta <- alpha * ((1 - p) / p)
+    return(data.frame(probability = p, alpha = alpha, beta = beta))
+  }) |> bind_rows()
+  
+  return(params)
+}
 
 ```
 
-We choose option 1 ($\alpha = 35$ and $\beta = ~198$) because it gives accounts for some uncertainty but not too much.
+### Beta-distribution Simulation Assumptions
 
-## Intervention uptake
+Assuming a fixed **\(\alpha = 40\)**, we calculate the corresponding **\(\beta\)** for the following key parameters. When a range is provided, we center the beta distribution around the midpoint.
 
-We estimate that the probability is around 0.75 but we're not sure where. Again lets use beta distribution.
+### Population Reached
 
-```{r intervention_uptake, echo=FALSE}
-params_uptake <- list(
-  list(alpha = 3, beta = 1, label = "1. Beta(3,1)"),
-  list(alpha = 15, beta = 5, label = "2. Beta(15,5)"),
-  list(alpha = 30, beta = 10, label = "3. Beta(30,10)"),
-  list(alpha = 60, beta = 20, label = "4. Beta(60,20)")
+* Aspirin: Provided parameters: 13-16% of ANC: assumption: **14.5%** of the population reached
+* Calcium: Provided parameters: 100% of ANC: assumption: **100%** of the population reached
+* MgSO₄: Provided parameters: 5% of ANC: assumption: **5%** of the population reached
+* MMS: Provided parameters: 100% of ANC: assumption: **100%** of the population reached
+* FCM: Provided parameters: 12% of ANC: assumption: **12%** of the population reached
+* ASA: Provided parameters: 11% of ANC: assumption: **11%** of the population reached
+* MMS: Provided parameters: 11% of ANC: assumption: **11%** of the population reached
+
+### Adverse Event Incidence
+
+* Aspirin, Preeclampsia: Provided parameters: 10-20%: assumption: **15%** incidence
+* Aspirin, Eclampsia, Provided parameters: 1-2%: assumption: **1.5%** incidence
+* MgSO₄, Eclampsia, Provided parameters: 1-2%: assumption: **1.5%** incidence
+* MMS: Anemia: Provided parameters: 40%: assumption: **40%** incidence
+* MMS: Low birth weight: 13.7-16.1%: assumption: **14.9%** incidence
+* FCM, Moderate and Severe Anemia: Provided parameters: 12%: assumption: **12%** incidence
+
+### Intervention Uptake
+
+* Aspirin, Preeclampsia/Eclapmsia: Provided parameters: 75%: assumption: **75%** uptake
+* MGSO₄, Eclampsia: Provided parameters: 50-80%: assumption: **65%** uptake
+* MMS Anemia/LBW: Provided parameters: 75%: assumption: **75%** uptake
+* FCM, Anemia: Provided parameters: 85%: assumption: **85%** uptake
+
+
+To model uncertainty around these estimates, we use **Beta distributions** with a fixed **\(\alpha = 40\)** and calculate the corresponding **\(\beta\)** to match the expected proportion for each intervention.
+
+
+```{r show_beta_dists, echo=FALSE, message=FALSE, warning=FALSE}
+alpha_fixed <- 40
+
+# Function to calculate beta given alpha and target probability
+calculate_beta_params <- function(alpha, target_prob) {
+  beta <- alpha * ((1 - target_prob) / target_prob)
+  return(beta)
+}
+
+# Combined dataset for Population Reached, Adverse Event Incidence, and Intervention Uptake
+simulation_data <- data.frame(
+  category = c(
+    rep("Population Reached", 5),
+    rep("Adverse Event Incidence", 6),
+    rep("Intervention Uptake", 4)
+  ),
+  drug_condition = c(
+    "Aspirin", "Calcium", "MgSO₄", "MMS", "FCM",                       # Population Reached
+    "Aspirin (Preeclampsia)", "Aspirin (Eclampsia)", "MgSO₄ (Eclampsia)", 
+    "MMS (Anemia)", "MMS (Low Birth Weight)", "FCM (Anemia)",          # Adverse Event Incidence
+    "Aspirin (PE/Eclampsia)", "MgSO₄ (Eclampsia)", 
+    "MMS (Anemia/LBW)", "FCM (Anemia)"                                # Intervention Uptake
+  ),
+  target_prob = c(
+    0.145, 1.00, 0.05, 1.00, 0.12,                                    # Population Reached
+    0.15, 0.015, 0.015, 0.40, 0.149, 0.12,                            # Adverse Event Incidence
+    0.75, 0.65, 0.75, 0.85                                            # Intervention Uptake
+  )
 )
 
-samples <- lapply(params_uptake, function(p) {
-  data.frame(
-    uptake = rbeta(10000, p$alpha, p$beta),
-    label = p$label
-  )
-}) |> bind_rows()
+# Calculate beta values
+simulation_data <- simulation_data |> 
+  mutate(beta = calculate_beta_params(alpha_fixed, target_prob))
 
-# Plotting
-ggplot(samples, aes(x = uptake, fill = label)) +
-  geom_histogram(bins = 50, alpha = 0.6, position = "identity") +
-  geom_vline(xintercept = 0.75, linetype = "dashed", color = "black", linewidth = 1) +
-  scale_x_continuous(breaks = seq(0, 1, 0.25)) +
-  facet_wrap(~label, scales = "free_y") +
-  labs(title = "Comparison of Adjusted Beta Distributions for Intervention Uptake",
-       x = "Proportion of Women Reached by Intervention",
-       y = "Frequency") +
+# Create a new combined label for facet titles
+simulation_data <- simulation_data |> 
+  mutate(facet_label = paste0(drug_condition, "\n(", category, ", ", round(target_prob * 100, 1), "%)"))
+
+# Generate Beta samples for each intervention
+samples <- simulation_data |> 
+  rowwise() |> 
+  mutate(proportion = list(rbeta(10000, alpha_fixed, beta))) |> 
+  unnest(proportion)
+
+# Combined Plot
+ggplot(samples, aes(x = proportion, fill = category)) +
+  geom_histogram(bins = 50, alpha = 0.6, position = "identity", color = "black") +
+  geom_vline(data = simulation_data, aes(xintercept = target_prob), 
+             linetype = "dashed", color = "red", linewidth = 1) +
+  facet_wrap(~facet_label, scales = "free_y", ncol = 3) +
+  labs(title = "Beta Distributions for Population Reached, Adverse Event Incidence, and Intervention Uptake",
+       x = "Proportion", y = "Frequency") +
+  scale_x_continuous(breaks = seq(0, 1, 0.1), limits = c(0, 1)) +
   theme_minimal() + 
-  theme(legend.position = "none")
-
-alpha_uptake <- 60
-beta_uptake <- 20
-```
-
-Here, we will choose option 4 ($\alpha = 60$ and $\beta = 20$). I think a narrower band around 0.75 is appropriate.
-
-## Adverse event rate
-
-We estimate that the probability of an adverse event, in this case preecclampsia, is between 10% and 20%. To handle the uncertainty around this, we can again use a beta distribution
-
-
-```{r adverse_event, echo=FALSE}
-
-params_adverse_event <- list(
-  list(alpha = 3, beta = 17, label = "1. Beta(3,17)"),
-  list(alpha = 15, beta = 85, label = "2. Beta(15,85)"),
-  list(alpha = 8, beta = 42, label = "3. Beta(8,42)"),
-  list(alpha = 25, beta = 140, label = "4. Beta(25,140)")
-)
-
-samples_adverse_event <- lapply(params_adverse_event, function(p) {
-  data.frame(
-    adverse_event_prob = rbeta(10000, p$alpha, p$beta),
-    label = p$label
-  )
-}) |> bind_rows()
-
-# Plotting
-ggplot(samples_adverse_event, aes(x = adverse_event_prob, fill = label)) +
-  geom_histogram(bins = 50, alpha = 0.6, position = "identity") +
-  facet_wrap(~label, scales = "free_y") +
-  geom_vline(xintercept = 0.10, linetype = "dashed", color = "black", linewidth = 1) +
-  geom_vline(xintercept = 0.20, linetype = "dashed", color = "black", linewidth = 1) +
-  labs(title = "Comparison of Beta Distributions for Adverse Event Probability",
-       x = "Probability of Adverse Event (Preeclampsia)",
-       y = "Frequency") +
-  scale_x_continuous(breaks = seq(0, 1, 0.1)) +
-  theme_minimal() + 
-  theme(legend.position = "none")
-
-alpha_adverse_event <- 25
-beta_adverse_event <- 140
+  theme(legend.position = "none",
+        strip.text = element_text(size = 10, face = "bold"))
 
 ```
 
-We will use option 4 ($\alpha = 25$ and $\beta = 140$). For this distribution, the vast majority of the mass is between .10 and .20. 
 
-Note that the mean here is $~0.15$. If we have no prior reason for choosing 0.10 vs 0.20, we can use a uniform distribution. In that distribution mass will not cluster around 0.15 but spread evenly from 0.10 and 0.20. My issue with that approach is I think its likely unfeasible that the range is that precise.
+## Effect sizes
+
+For effect sizes, when given a range, we will assume a uniform distrubtion with minimum and upward bounds. When only a single percent is provided, we do 10% on each side. If a CI is provided from research, we use that.
+
+* Aspirin, Preeclampsia: Provided parameters: 10-24%; assumption: 10-24%
+* Calcium, Preeclampsia: Provided parameters: 50%; assumption: 40-60%
+* MgSO₄, Eclampsia: Provided parameters: 46%; assumption: 36-56%
+* MMS, Anemia: Provided parameters: 27%; assumption: 17-37%
+* FCM, Anemia: Provided parameters: 75%; assumption from CI: 64-87%
+
 
 
 # Simulation Steps
+## Simulation Steps Description
 
-**Simulation Steps Description:**
+We simulate the intervention and its potential benefits using probabilistic methods to account for uncertainty. We will run **3,000,000 simulations** for each scenario, with flexibility to scale this number for higher precision in future analyses.
 
-Below is how we will simulate the intervention and potential benefits. We will run 10,000 simulations for now; we can add more later.
+---
 
-1. **Population Initialization:**
-   The total population size of women in antenatal care is fixed at the sum of women in ANC estimated in Kenya, Nigeria, India, and Senegal. With current data provided, that is 1,672,497 people.
+### 1. **Population Initialization**
+The total population of women in antenatal care (**ANC**) is fixed at the sum of women estimated in **Kenya**, **Nigeria**, **India**, and **Senegal**. Based on current data, this totals **422,726** women.
 
-2. **Simulating Population Reached:**
-   The proportion of women who can be reached by the intervention is drawn from a Beta distribution with parameters alpha = 35 and beta = $35*5.6667$, or roughly 198. This reflects an estimate of 15% of people being able to be reached. $0.15 = \frac{35}{35*5.6667}$
+---
 
-3. **Simulating Intervention Uptake:**
-   Among the women reached, the proportion who actually uptake the intervention is drawn from another Beta distribution with parameters alpha = 60 and beta = 20. This reflects an estimate of 75% uptake. 
+### 2. **Simulating Population Reached**
+The proportion of women who can be reached by the intervention is drawn from a **Beta distribution**. We fix:
 
-4. **Simulating Adverse Event Probability:**
-   The baseline probability of experiencing the adverse event (preeclampsia) without intervention is hypothsized to be between 0.10 and 0.20. We will draw from Beta(25, 150).  This puts most probability mass between 0.10 and 0.20 but does not assume the probability outside that range is impossible.
+\[
+\alpha = 40, \quad \beta = \alpha \times \left(\frac{1 - p}{p}\right)
+\]
 
-6. **Effect Size Simulation:**
-   The effect size (i.e., the reduction in the adverse event rate due to the intervention) is drawn from a uniform distribution between 10% and 24%, representing equal likelihood across this range.
+Where **\( p \)** is the target proportion of the population expected to be reached.
 
-7. **Adverse Events Without Intervention:**
-   For those not receiving the intervention, adverse events are simulated using the baseline probability outlined above. A binomial distribution with the probability from step 4 is used.
+**For example**, if we estimate that **15%** of the population is reachable (\( p = 0.15 \)):
 
-8. **Adverse Events With Intervention:**
-   For those who received the intervention, the adverse event probability is adjusted by the drawn effect size, and adverse events are simulated accordingly with a binomial distribution.
+\[
+\beta = 40 \times \left(\frac{1 - 0.15}{0.15}\right) = 40 \times 5.6667 \approx 226.67
+\]
 
-9. **Calculating Cases Prevented:**
-   The number of cases prevented is calculated as the difference between the expected cases without intervention (based on uptake) and the actual cases with intervention.
+Thus, the proportion of the population reached is drawn from **Beta(40, 226.67)**.
 
-In short, for each trial we don't assume a fixed reachable population, uptake, adverse event rate, or effect size. Instead, we draw from distributions that reflect our uncertainty. We will then be able to describe the distribution of results as well as the mean.
+---
+
+### 3. **Simulating Intervention Uptake**
+Among those reached, the proportion of women who uptake the intervention is also drawn from a **Beta distribution** using the same formula:
+
+\[
+\alpha = 40, \quad \beta = 40 \times \left(\frac{1 - p}{p}\right)
+\]
+
+**For example**, if we estimate **75%** uptake (\( p = 0.75 \)):
+
+\[
+\beta = 40 \times \left(\frac{1 - 0.75}{0.75}\right) = 40 \times 0.3333 \approx 13.33
+\]
+
+Thus, intervention uptake is drawn from **Beta(40, 13.33)**.
+
+---
+
+### 4. **Simulating Adverse Event Probability**
+The baseline probability of experiencing the adverse event (**preeclampsia**) without intervention is modeled using a **Beta distribution** with:
+
+\[
+\alpha = 40, \quad \beta = 40 \times \left(\frac{1 - p}{p}\right)
+\]
+
+**For example**, if the estimated incidence is **15%** (\( p = 0.15 \)):
+
+\[
+\beta = 40 \times \left(\frac{1 - 0.15}{0.15}\right) = 226.67
+\]
+
+Thus, the adverse event probability is drawn from **Beta(40, 226.67)**, allowing for variability around the baseline incidence.
+
+---
+
+### 5. **Effect Size Simulation**
+The **effect size** (i.e., the reduction in the adverse event rate due to the intervention) is drawn from a **uniform distribution** when a range is provided:
+
+\[
+\text{Uniform}(p_{\text{min}}, p_{\text{max}})
+\]
+
+**For example**, if the effect size is estimated to reduce preeclampsia by **10% to 24%**, we use:
+
+\[
+\text{Uniform}(0.10, 0.24)
+\]
+
+This assumes equal likelihood across the entire range of plausible effect sizes.
+
+---
+
+### 6. **Adverse Events Without Intervention**
+For those **not receiving** the intervention, adverse events are simulated using a **binomial distribution** based on the adverse event probability drawn in step 4:
+
+\[
+\text{Binomial}(n_{\text{no intervention}}, p_{\text{adverse event}})
+\]
+
+**For example**, if **300,000** women do not receive the intervention and the adverse event probability is drawn as **14%**, we simulate:
+
+\[
+\text{Binomial}(300,000, 0.14)
+\]
+
+---
+
+### 7. **Adverse Events With Intervention**
+For those **receiving** the intervention, the adverse event probability is reduced by the **effect size** from step 5. Adverse events are simulated using:
+
+\[
+\text{Binomial}\left(n_{\text{uptake}}, p_{\text{adverse event}} \times (1 - \text{effect size})\right)
+\]
+
+**For example**, if the baseline adverse event rate is **15%** and the effect size is drawn as **20%**, the adjusted rate becomes:
+
+\[
+p_{\text{adjusted}} = 0.15 \times (1 - 0.20) = 0.12
+\]
+
+We then simulate adverse events using **Binomial(\(n_{\text{uptake}}\), 0.12)**.
+
+---
+
+### 8. **Calculating Cases Prevented**
+The number of **cases prevented** is calculated as the difference between the **expected cases without intervention** and the **observed cases with intervention**:
+
+\[
+\text{Cases Prevented} = \left(n_{\text{uptake}} \times p_{\text{adverse event}}\right) - \text{Adverse Events With Intervention}
+\]
+
+**For example**, if **50,000** women received the intervention, and the baseline adverse event rate is **15%**, we expect:
+
+\[
+50,000 \times 0.15 = 7,500 \text{ cases without intervention}
+\]
+
+If the intervention reduces cases to **6,000**, then:
+
+\[
+\text{Cases Prevented} = 7,500 - 6,000 = 1,500
+\]
+
+---
+
+### **Summary of Simulation Approach**
+
+For each simulation, we do **not assume fixed values** for the reachable population, intervention uptake, adverse event rates, or effect sizes. Instead, we draw from **Beta distributions** (with **\(\alpha = 40\)** and appropriately calculated **\(\beta\)**) and **uniform distributions** to reflect uncertainty. This allows us to describe both the **distribution of potential outcomes** and their **mean estimates**, offering a robust assessment of intervention impact.
 
 # Simulation Results
 
-```{r simulation, echo=FALSE}
+```{r simulation_functions, echo=FALSE}
 
-simulate_preeclampsia_outcomes <- function(
-  population_size = 1672497,
-  n_simulations = 10000,
-  alpha_reached = 35,
-  beta_reached = 35 * 5.6667,
-  alpha_uptake = 60,
-  beta_uptake = 20,
-  alpha_adverse_event = 25,
-  beta_adverse_event = 150,
+simulate_outcomes <- function(
+  population_size = 422726,
+  n_simulations = 3000000,
+
+  # Alpha Parameter for Beta Distributions
+  alpha_param = 40,  # Default alpha = 40
+
+  # Target Probabilities for Reached, Uptake, and Adverse Event
+  target_p_reached = 0.15,        # Example: 15% reachable population
+  target_p_uptake = 0.75,         # Example: 75% intervention uptake
+  target_p_adverse_event = 0.15,  # Example: 15% adverse event rate without intervention
+
+  # Effect Size Range
   effect_size_min = 0.10,
   effect_size_max = 0.24,
+
+  # Caching
   simulation_name = "default_simulation",
   attempt_cache = FALSE
 ) {
+  # Ensure results directory exists
   if (!dir.exists("results")) {
     dir.create("results")
   }
-  
+
   cache_path <- paste0("results/", simulation_name, "_", n_simulations, "_sims.rds")
-  
+
   cat("Starting simulation...\n")
   cat("Total simulations: ", format(n_simulations, scientific = FALSE), "\n")
-  
+
   # Check for cached results
   if (attempt_cache && file.exists(cache_path)) {
     cached_data <- readRDS(cache_path)
     return(cached_data)
   }
-  
-  # Vectorized simulation logic
-  p_reached <- rbeta(n_simulations, alpha_reached, beta_reached)
+
+  # Function to calculate beta based on alpha and target probability
+  calculate_beta <- function(alpha, p) {
+    beta <- alpha * ((1 - p) / p)
+    return(beta)
+  }
+
+  # Calculate beta values for each parameter
+  beta_reached <- calculate_beta(alpha_param, target_p_reached)
+  beta_uptake <- calculate_beta(alpha_param, target_p_uptake)
+  beta_adverse_event <- calculate_beta(alpha_param, target_p_adverse_event)
+
+  # Draw from Beta distributions for reached, uptake, and adverse event
+  p_reached <- rbeta(n_simulations, alpha_param, beta_reached)
   n_reached <- round(population_size * p_reached)
-  
-  p_uptake <- rbeta(n_simulations, alpha_uptake, beta_uptake)
+
+  p_uptake <- rbeta(n_simulations, alpha_param, beta_uptake)
   n_uptake <- rbinom(n_simulations, n_reached, p_uptake)
-  
-  p_adverse_event <- rbeta(n_simulations, alpha_adverse_event, beta_adverse_event)
+
+  p_adverse_event <- rbeta(n_simulations, alpha_param, beta_adverse_event)
   n_no_intervention <- population_size - n_uptake
   adverse_events_no_intervention <- rbinom(n_simulations, n_no_intervention, p_adverse_event)
-  
+
+  # Effect size drawn from uniform distribution
   effect_size <- runif(n_simulations, effect_size_min, effect_size_max)
+
+  # Adjusted adverse event rate for those who received the intervention
   adjusted_adverse_event_rate <- p_adverse_event * (1 - effect_size)
-  
   adverse_events_with_intervention <- rbinom(n_simulations, n_uptake, adjusted_adverse_event_rate)
-  
+
+  # Total adverse events and cases prevented
   total_adverse_events <- adverse_events_no_intervention + adverse_events_with_intervention
   cases_prevented <- (n_uptake * p_adverse_event) - adverse_events_with_intervention
-  
+
   # Store results in a data.table
   results_dt <- data.table(
     simulation_id = 1:n_simulations,
@@ -285,36 +433,34 @@ simulate_preeclampsia_outcomes <- function(
     total_adverse_events,
     cases_prevented
   )
-  
+
   # Convert to tibble for output
   results_tibble <- as_tibble(results_dt)
-  
+
   # Combine results with input parameters
   output <- list(
     input_parameters = list(
       population_size = population_size,
       n_simulations = n_simulations,
-      alpha_reached = alpha_reached,
-      beta_reached = beta_reached,
-      alpha_uptake = alpha_uptake,
-      beta_uptake = beta_uptake,
-      alpha_adverse_event = alpha_adverse_event,
-      beta_adverse_event = beta_adverse_event,
+      alpha_param = alpha_param,
+      target_p_reached = target_p_reached,
+      target_p_uptake = target_p_uptake,
+      target_p_adverse_event = target_p_adverse_event,
       effect_size_min = effect_size_min,
       effect_size_max = effect_size_max,
       simulation_name = simulation_name
     ),
     simulation_results = results_tibble
   )
-  
+
   # Save the combined output to cache
   saveRDS(output, cache_path)
-  
+
   return(output)
 }
 
 summarize_simulation_results <- function(simulation_results) {
-  simulation_results |> 
+  simulation_results |>
     summarise(
       p025_cases_prevented = quantile(cases_prevented, 0.025),
       p05_cases_prevented = quantile(cases_prevented, 0.05),
@@ -339,65 +485,65 @@ generate_simulation_plots <- function(simulation_results) {
       adverse_event_rate_no_intervention = adverse_events_no_intervention / n_no_intervention,
       adverse_event_rate_with_intervention = adverse_events_with_intervention / n_uptake
     )
-  
+
   # Effect Sizes Plot
   effect_size_plot <- ggplot(simulation_results, aes(x = effect_size)) +
     geom_histogram(bins = 50, fill = 'skyblue', color = 'black') +
     labs(title = 'Distribution of Effect Sizes', x = 'Effect Size', y = 'Frequency') +
     theme_minimal()
-  
+
   # Number Reached Plot
   n_reached_plot <- ggplot(simulation_results, aes(x = n_reached)) +
     geom_histogram(bins = 50, fill = 'skyblue', color = 'black') +
     labs(title = 'Distribution of ANC Patients Reached', x = 'Number Reached', y = 'Frequency') +
     theme_minimal()
-  
+
   # Number Uptake Plot
   n_uptake_plot <- ggplot(simulation_results, aes(x = n_uptake)) +
     geom_histogram(bins = 50, fill = 'skyblue', color = 'black') +
     labs(title = 'Distribution of Number Participating In Intervention', x = 'Number Uptake', y = 'Frequency') +
     theme_minimal()
-  
+
   # Adverse Events No Intervention (Counts)
   adverse_events_no_intervention_plot <- ggplot(simulation_results, aes(x = adverse_events_no_intervention)) +
     geom_histogram(bins = 50, fill = 'skyblue', color = 'black') +
     labs(title = 'Adverse Events (No Intervention)', x = 'Number of Adverse Events', y = 'Frequency') +
     theme_minimal()
-  
+
   # Adverse Events With Intervention (Counts)
   adverse_events_with_intervention_plot <- ggplot(simulation_results, aes(x = adverse_events_with_intervention)) +
     geom_histogram(bins = 50, fill = 'skyblue', color = 'black') +
     labs(title = 'Adverse Events (With Intervention)', x = 'Number of Adverse Events', y = 'Frequency') +
     theme_minimal()
-  
+
   # Combined Plot for Adverse Event Rates
   adverse_event_rates_combined <- simulation_results %>%
     select(adverse_event_rate_no_intervention, adverse_event_rate_with_intervention) %>%
     pivot_longer(cols = everything(), names_to = "intervention_status", values_to = "rate")
-  
+
   adverse_event_rate_plot <- ggplot(adverse_event_rates_combined, aes(x = rate, fill = intervention_status)) +
     geom_histogram(bins = 50, position = "identity", alpha = 0.5, color = 'black') +
     scale_fill_manual(values = c('#1f77b4', '#ff7f0e'), labels = c('No Intervention', 'With Intervention')) +  # Blue and Orange
     labs(title = 'Comparison of Adverse Event Rates', x = 'Adverse Event Rate', y = 'Frequency') +
     theme_minimal()
-    
+
   adverse_event_density_plot <- ggplot(adverse_event_rates_combined, aes(x = rate, fill = intervention_status)) +
   geom_density(alpha = 0.5, color = 'black') +
   scale_fill_manual(values = c('#1f77b4', '#ff7f0e'), labels = c('No Intervention', 'With Intervention')) +  # Blue & Orange
-  labs(title = 'Comparison of Adverse Event Rates (Density Plot)', 
-       x = 'Adverse Event Rate', 
+  labs(title = 'Comparison of Adverse Event Rates (Density Plot)',
+       x = 'Adverse Event Rate',
        y = 'Density') +
   theme_minimal()
-  
+
   # Cases Prevented Plot
   cases_prevented_plot <- ggplot(simulation_results, aes(x = cases_prevented)) +
     geom_histogram(bins = 50, fill = 'skyblue', color = 'black') +
     labs(title = 'Distribution of Cases Prevented', x = 'Cases Prevented', y = 'Frequency') +
     theme_minimal()
-  
+
   # Quantiles for Cases Prevented
   cases_prevented_quantiles <- quantile(simulation_results$cases_prevented, probs = seq(0, 1, 0.05))
-  
+
   # Return list of plots and quantiles
   list(
     effect_size_plot = effect_size_plot,
@@ -413,8 +559,8 @@ generate_simulation_plots <- function(simulation_results) {
 }
 
 format_summary_results <- function(summary_results) {
-  summary_results |> 
-    tidyr::pivot_longer(cols = everything(), names_to = "Metric", values_to = "Value") |> 
+  summary_results |>
+    tidyr::pivot_longer(cols = everything(), names_to = "Metric", values_to = "Value") |>
     dplyr::mutate(
       Metric = dplyr::recode(Metric,
         p025_cases_prevented = "2.5th Percentile Cases Prevented",
@@ -431,7 +577,7 @@ format_summary_results <- function(summary_results) {
         min_effect_size = "Minimum Effect Size",
         max_effect_size = "Maximum Effect Size"
       )
-    ) |> 
+    ) |>
     mutate(
       Value = round(Value, 2)
     )
@@ -458,26 +604,26 @@ format_simulation_parameters <- function(parameters) {
 }
 
 output_simulation_results <- function(simulation_output, intervention_name = "Intervention") {
-  
+
   # Format simulation parameters
   formatted_parameters <- format_simulation_parameters(simulation_output$input_parameters)
-  
+
   # Display formatted simulation parameters
   cat(paste0("\n### Simulation Parameters\n"))
   print(formatted_parameters |> kable())
-  
+
   # Summarize simulation results
   summary_results <- summarize_simulation_results(simulation_output$simulation_results)
-  
+
   # Format summarized results
   formatted_results <- format_summary_results(summary_results)
-  
+
   # Display formatted summary table
   cat(paste0("###  Summary Results\n"))
   print(formatted_results |> kable())
   # Generate plots
   sim_plots <- generate_simulation_plots(simulation_output$simulation_results)
-  
+
   # Display key plots
   cat(paste0("\n### Plots\n"))
   print(sim_plots$n_reached_plot)
@@ -488,70 +634,171 @@ output_simulation_results <- function(simulation_output, intervention_name = "In
   print(sim_plots$adverse_event_rate_plot)
   print(sim_plots$adverse_event_density_plot)
   print(sim_plots$cases_prevented_plot)
-  
+
   # Format and display quantiles for cases prevented
   cat(paste0("\n\n### Cases Prevented Quantiles\n"))
   quantiles_table <- format_quantiles_table(sim_plots$cases_prevented_quantiles)
   print(quantiles_table |> kable())
 }
 
-## Run the simulations
-# Run the simulation with caching and naming
-low_dose_aspirin_pe_simulation_results <- simulate_preeclampsia_outcomes(
+```
+
+
+```{r run_simulations, echo=FALSE}
+n_simulations <- 3000000
+n_population <- 422726
+alpha_param <- 40
+
+
+low_dose_aspirin_pe_simulation_results <- simulate_outcomes(
   population_size = n_population,
-  n_simulations = 3000000,
-  alpha_reached = 35,
-  beta_reached = 35 * 5.6667,
-  alpha_uptake = 60,
-  beta_uptake = 20,
-  alpha_adverse_event = 25,
-  beta_adverse_event = 150,
+  n_simulations = n_simulations,
+  alpha_param = alpha_param,
+  target_p_reached = 0.145,
+  target_p_uptake = 0.75,
+  target_p_adverse_event = 0.06,
   effect_size_min = 0.10,
   effect_size_max = 0.24,
   simulation_name = "low_dose_aspirin_preeclampsia_simulation",
   attempt_cache = TRUE
 )
 
-calcium_pe_simulation_results <- simulate_preeclampsia_outcomes(
+low_dose_aspirin_eclampsia_simulation_results <- simulate_outcomes(
   population_size = n_population,
-  n_simulations = 3000000,
-  alpha_reached = 35,
-  beta_reached = 35 * 5.6667,
-  alpha_uptake = 60,
-  beta_uptake = 20,
-  alpha_adverse_event = 25,
-  beta_adverse_event = 150,
-  effect_size_min = 0.50,
-  effect_size_max = 0.50,
+  n_simulations = n_simulations,
+  alpha_param = alpha_param,
+  target_p_reached = 0.145,         
+  target_p_uptake = 0.75,           
+  target_p_adverse_event = 0.015,   
+  effect_size_min = 0.10,           
+  effect_size_max = 0.24,
+  simulation_name = "low_dose_aspirin_eclampsia_simulation",
+  attempt_cache = TRUE
+)
+
+calcium_pe_simulation_results <- simulate_outcomes(
+  population_size = n_population,
+  n_simulations = n_simulations,
+  alpha_param = alpha_param,
+  target_p_reached = 1.00,
+  target_p_uptake = 0.75,
+  target_p_adverse_event = 0.15,
+  effect_size_min = 0.40,
+  effect_size_max = 0.60,
   simulation_name = "calcium_preeclampsia_simulation",
+  attempt_cache = TRUE
+)
+
+mgso4_eclampsia_simulation_results <- simulate_outcomes(
+  population_size = n_population,
+  n_simulations = n_simulations,
+  alpha_param = alpha_param,
+  target_p_reached = 0.05,
+  target_p_uptake = 0.65,
+  target_p_adverse_event = 0.015,
+  effect_size_min = 0.36,
+  effect_size_max = 0.56,
+  simulation_name = "mgso4_eclampsia_simulation",
+  attempt_cache = TRUE
+)
+
+mms_anemia_simulation_results <- simulate_outcomes(
+  population_size = n_population,
+  n_simulations = n_simulations,
+  alpha_param = alpha_param,
+  target_p_reached = 1.00,
+  target_p_uptake = 0.75,
+  target_p_adverse_event = 0.40,
+  effect_size_min = 0.17,
+  effect_size_max = 0.37,
+  simulation_name = "mms_anemia_simulation",
+  attempt_cache = TRUE
+)
+
+mms_lbw_simulation_results <- simulate_outcomes(
+  population_size = n_population,
+  n_simulations = n_simulations,
+  alpha_param = alpha_param,
+  target_p_reached = 1.00,
+  target_p_uptake = 0.75,
+  target_p_adverse_event = 0.149,
+  effect_size_min = 0.17,
+  effect_size_max = 0.37,
+  simulation_name = "mms_low_birth_weight_simulation",
+  attempt_cache = TRUE
+)
+
+fcm_anemia_simulation_results <- simulate_outcomes(
+  population_size = n_population,
+  n_simulations = n_simulations,
+  alpha_param = alpha_param,
+  target_p_reached = 0.12,
+  target_p_uptake = 0.85,
+  target_p_adverse_event = 0.12,
+  effect_size_min = 0.64,
+  effect_size_max = 0.87,
+  simulation_name = "fcm_anemia_simulation",
   attempt_cache = TRUE
 )
 
 ```
 
-# Results 
+# Results
 
-The same reachable population/uptake/adverse event rates were used for both interventions.  The only difference was the effect size.  The effect size for low-dose aspirin was set to be between 0.10 and 0.24, while the effect size for calcium was set to be 0.50.
+For each intervention, we simulated the **reachable population**, **intervention uptake**, and **adverse event rates** based on available data. The primary variation across interventions lies in the **effect sizes**. Below, we provide the **median** and **10-90% credible intervals** for the number of **cases prevented**.
 
-My recommendation is to report the median and 10-90% credible interval (or whatever you deem the best low/high bounds) for the number of cases prevented.  To pick a different interval, just use a different percentile provided below.
+- **To estimate cost savings**, multiply the number of cases prevented by the cost per case.
+- **To estimate mortality reductions**, apply the death rate per case to the number of cases prevented.
 
-* To estimate money saved, just multiply cases prevented by a cost.
-* To estimate deaths (or a similar mortality-type metric), just compare rate of deaths expected per case by the number of cases prevented.
+---
 
-## Low-dose Aspirin
+## Low-Dose Aspirin (Preeclampsia)
 
-```{r low_dose_aspirin_results, echo=FALSE, results='asis'}
-
-output_simulation_results(low_dose_aspirin_pe_simulation_results, "Low Dose Aspirin")
-
-```
-
-
-## Calcium
-
-```{r calcium_results, echo=FALSE, results='asis'}
-
-output_simulation_results(calcium_pe_simulation_results, "Calcium")
+```{r output_results1, echo=FALSE, results='asis'}
+output_simulation_results(low_dose_aspirin_pe_simulation_results, "Low-Dose Aspirin (Preeclampsia)")
 
 ```
 
+## Low-Dose Aspirin (Eclampsia)
+
+```{r output_results2, echo=FALSE, results='asis'}
+output_simulation_results(low_dose_aspirin_eclampsia_simulation_results, "Low-Dose Aspirin (Eclampsia)")
+
+```
+
+## Calcium (Preeclampsia)
+
+```{r output_results3, echo=FALSE, results='asis'}
+output_simulation_results(calcium_pe_simulation_results, "Calcium (Preeclampsia)")
+
+```
+
+## MgSO₄ (Eclampsia)
+
+```{r output_results4, echo=FALSE, results='asis'}
+
+output_simulation_results(mgso4_eclampsia_simulation_results, "MgSO₄ (Eclampsia)")
+
+```
+
+## MMS (Anemia)
+
+
+```{r output_results5, echo=FALSE, results='asis'}
+output_simulation_results(mms_anemia_simulation_results, "MMS (Anemia)")
+
+```
+
+## MMS (Low Birth Weight)
+
+```{r output_results6, echo=FALSE, results='asis'}
+output_simulation_results(mms_lbw_simulation_results, "MMS (Low Birth Weight)")
+
+```
+
+## FCM (Anemia)
+
+```{r output_results7, echo=FALSE, results='asis'}
+output_simulation_results(fcm_anemia_simulation_results, "FCM (Anemia)")
+
+```
